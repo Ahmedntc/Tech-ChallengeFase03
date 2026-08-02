@@ -1,0 +1,61 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# --- Ambientes virtuais ---
+.venv/
+venv/
+env/
+.python-version
+
+# --- Poetry ---
+# poetry.lock É versionado propositalmente (garante builds reprodutíveis)
+
+# --- Testes / cobertura / lint ---
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- Variáveis de ambiente / segredos ---
+.env
+.env.*
+!.env.example
+
+# --- Dados (mantemos os CSVs originais, ignoramos artefatos gerados) ---
+data/processed/*
+!data/processed/.gitkeep
+
+# --- Modelos treinados (grandes / binários, não versionar) ---
+models/*
+!models/.gitkeep
+
+# --- Airflow ---
+airflow/logs/
+airflow/airflow.db
+airflow/airflow.cfg
+airflow/webserver_config.py
+airflow/standalone_admin_password.txt
+
+# --- Monitoramento (dados persistidos dos containers) ---
+monitoring/prometheus/data/
+monitoring/grafana/data/
+
+# --- Docker ---
+*.pid
+
+# --- IDEs / SO ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

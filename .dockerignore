@@ -1,0 +1,37 @@
+# Controle de versão / CI
+.git
+.github
+
+# Ambientes virtuais e caches
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# Dados brutos (não precisam ir para a imagem de inferência)
+data/raw/*.csv
+
+# Airflow e monitoramento (não fazem parte da imagem da API)
+airflow/
+monitoring/
+
+# Testes e docs
+tests/
+docs/
+*.md
+!README.md
+
+# Ambiente / segredos
+.env
+.env.*
+!.env.example
+
+# SO / IDE
+.DS_Store
+.vscode/
+.idea/
