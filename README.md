@@ -1,4 +1,3 @@
-
 # Triagem Automática de Laudos Médicos — Tech Challenge Fase 3 (MLET)
 
 Sistema de triagem automática de exames de texto (laudos médicos), classificando
@@ -19,7 +18,6 @@ ponta a ponta pedido no desafio (≥ 2.000 amostras, coluna de texto + coluna de
 target).
 
 Arquivos em `data/raw/`:
-
 - `medical_tc_train.csv` (~11.5k linhas)
 - `medical_tc_test.csv` (~2.9k linhas)
 - `medical_tc_labels.csv` (mapeamento label → nome da condição)
@@ -42,15 +40,15 @@ problema de forma equivalente; a escolha por AWS aqui é por ser a mais comum em
 ambientes de ensino/portfólio e ter o caminho mais direto entre "container
 Docker local" e "produção" sem reescrever nada:
 
-| Necessidade                               | Serviço AWS                                                                                                                             | Por quê                                                                                                                                                          |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Rodar o container da API 24/7, escalável | **ECS Fargate**                                                                                                                    | Serverless (sem gerenciar EC2/nós), mesma imagem Docker usada localmente, autoscaling por CPU/latência                                                          |
-| Registro da imagem                        | **ECR**                                                                                                                            | Integração nativa com ECS e com o workflow do GitHub Actions (build → push → deploy)                                                                          |
-| Entrada de tráfego / TLS / health checks | **Application Load Balancer**                                                                                                      | Distribui requisições entre réplicas, dá o endpoint público estável                                                                                         |
-| Orquestração do retreino (DAG Airflow)  | **MWAA** (Managed Workflows for Apache Airflow) *ou* Airflow em container no ECS (mais barato para o escopo do desafio)          | Mesma DAG usada localmente, sem reescrever a lógica de treino                                                                                                    |
-| Armazenamento de dados/modelos            | **S3**                                                                                                                             | Fonte dos CSVs de treino e destino dos artefatos de modelo (`.pkl` / `.onnx`) versionados por execução da DAG                                               |
-| Monitoramento                             | **Prometheus + Grafana** auto-hospedados (Fargate/EC2) ou **Amazon Managed Service for Prometheus + Amazon Managed Grafana** | Localmente usamos Prometheus/Grafana via Docker Compose; em produção os serviços gerenciados equivalentes evitam operar a stack de observabilidade manualmente |
-| CI/CD                                     | **GitHub Actions** (fora da AWS) → deploy via `aws ecs update-service`                                                          | Já é requisito do desafio; a Action publica a imagem no ECR e atualiza o serviço ECS                                                                           |
+| Necessidade | Serviço AWS | Por quê |
+|---|---|---|
+| Rodar o container da API 24/7, escalável | **ECS Fargate** | Serverless (sem gerenciar EC2/nós), mesma imagem Docker usada localmente, autoscaling por CPU/latência |
+| Registro da imagem | **ECR** | Integração nativa com ECS e com o workflow do GitHub Actions (build → push → deploy) |
+| Entrada de tráfego / TLS / health checks | **Application Load Balancer** | Distribui requisições entre réplicas, dá o endpoint público estável |
+| Orquestração do retreino (DAG Airflow) | **MWAA** (Managed Workflows for Apache Airflow) *ou* Airflow em container no ECS (mais barato para o escopo do desafio) | Mesma DAG usada localmente, sem reescrever a lógica de treino |
+| Armazenamento de dados/modelos | **S3** | Fonte dos CSVs de treino e destino dos artefatos de modelo (`.pkl` / `.onnx`) versionados por execução da DAG |
+| Monitoramento | **Prometheus + Grafana** auto-hospedados (Fargate/EC2) ou **Amazon Managed Service for Prometheus + Amazon Managed Grafana** | Localmente usamos Prometheus/Grafana via Docker Compose; em produção os serviços gerenciados equivalentes evitam operar a stack de observabilidade manualmente |
+| CI/CD | **GitHub Actions** (fora da AWS) → deploy via `aws ecs update-service` | Já é requisito do desafio; a Action publica a imagem no ECR e atualiza o serviço ECS |
 
 Trade-off consciente: Fargate tem cold-start e custo por hora maior que um único
 EC2 fixo, mas evita gestão de infraestrutura e escala melhor com picos de
@@ -103,6 +101,12 @@ poetry install
 # ativar o ambiente virtual do Poetry
 poetry shell
 
+# treinar o modelo baseline (gera models/model.pkl e models/labels.json)
+poetry run python -m training.train
+
+# subir a API localmente
+poetry run uvicorn app.main:app --reload
+
 # rodar os testes
 poetry run pytest
 
@@ -110,10 +114,20 @@ poetry run pytest
 poetry run ruff check .
 ```
 
+Depois de subir a API, teste em outro terminal:
+
+```bash
+curl http://localhost:8000/health
+
+curl -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"texto": "Patient presents with severe chest pain radiating to the left arm, shortness of breath and diaphoresis."}'
+```
+
 ## Rodando com Docker
 
 ```bash
-# build da imagem da API
+# build da imagem da API (requer models/model.pkl já treinado — passo acima)
 docker build -t triagem-laudos-api .
 
 # subir a API isolada
@@ -123,13 +137,33 @@ docker run -p 8000:8000 triagem-laudos-api
 docker compose up --build
 ```
 
+## Latência baseline (Etapa 1)
+
+Medida com `scripts/benchmark_latency.py` (50 requisições ao `/predict`, após
+warmup, rodando localmente com `uvicorn`):
+
+| Métrica | Valor |
+|---|---|
+| Média | 26.4 ms |
+| Mediana | 25.7 ms |
+| p95 | 29.9 ms |
+| p99 | 37.0 ms |
+
+```bash
+poetry run python scripts/benchmark_latency.py --url http://localhost:8000 --n 100 --tag baseline
+```
+
+Esse número serve de referência para a comparação com o modelo otimizado em
+ONNX na Etapa 4. Ao rodar contra o container Docker (em vez do `uvicorn`
+local), espera-se latência equivalente — a rede é loopback em ambos os casos.
+
 ## Etapas do desafio
 
-- [X] **Estrutura do projeto** — pastas, `.gitignore`, Docker, Poetry, README
-- [ ] **Etapa 1** — API FastAPI + Dockerfile + medição de latência baseline
+- [x] **Estrutura do projeto** — pastas, `.gitignore`, Docker, Poetry, README
+- [x] **Etapa 1** — API FastAPI (`/health`, `/predict`) + modelo baseline (TF-IDF + Random Forest) + Dockerfile + latência baseline medida
 - [ ] **Etapa 2** — GitHub Actions (lint + test) + DAG Airflow de treino
 - [ ] **Etapa 3** — Docker Compose (API + Prometheus + Grafana) + dashboard
-- [ ] **Etapa 4** — Treino do modelo + otimização ONNX + comparação de latência + vídeo STAR
+- [ ] **Etapa 4** — Otimização ONNX + comparação de latência + vídeo STAR
 
 ## Vídeo STAR
 
