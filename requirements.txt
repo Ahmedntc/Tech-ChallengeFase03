@@ -1,0 +1,19 @@
+# Dependências do ambiente Airflow, isoladas do Poetry do projeto principal.
+#
+# O Airflow define "constraint files" por versão (combinação exata de
+# versões testadas pelo projeto Apache Airflow) que entram em conflito com o
+# resolver do Poetry se colocadas no mesmo pyproject.toml. Por isso o
+# ambiente do Airflow é instalado separadamente:
+#
+#   AIRFLOW_VERSION=2.10.3
+#   PYTHON_VERSION="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+#   CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
+#   pip install "apache-airflow==${AIRFLOW_VERSION}" --constraint "${CONSTRAINT_URL}"
+#   pip install -r airflow/requirements.txt
+#
+# As libs abaixo são as mesmas usadas pelo training/ (fora do escopo do
+# constraint file do Airflow, então seguem soltas aqui):
+scikit-learn>=1.5,<1.6
+pandas>=2.2,<2.3
+numpy>=1.26,<2.0
+joblib>=1.4,<1.5
