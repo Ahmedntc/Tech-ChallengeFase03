@@ -137,31 +137,104 @@ docker run -p 8000:8000 triagem-laudos-api
 docker compose up --build
 ```
 
-## Latência baseline (Etapa 1)
+## Modelo baseline e latência (Etapa 1)
 
-Medida com `scripts/benchmark_latency.py` (50 requisições ao `/predict`, após
-warmup, rodando localmente com `uvicorn`):
+Métricas do modelo (TF-IDF + Random Forest, 200 árvores, treinado sobre as
+11.550 amostras de treino, avaliado nas 2.888 de teste):
 
 | Métrica | Valor |
 |---|---|
-| Média | 26.4 ms |
-| Mediana | 25.7 ms |
-| p95 | 29.9 ms |
-| p99 | 37.0 ms |
+| Acurácia | 0.4771 |
+| F1-macro | 0.4795 |
+| Tempo de treino | 20.0 s |
+
+Acurácia moderada é esperada aqui: são 5 classes de condição clínica com
+sobreposição de vocabulário (ex.: "general pathological conditions" é uma
+classe "genérica" que puxa recall de outras). Serve como baseline honesto
+para comparar contra a versão otimizada em ONNX na Etapa 4 — o foco do
+desafio é o pipeline (deploy, CI/CD, monitoramento, latência), não a métrica
+de classificação em si.
+
+Latência do `/predict`, medida com `scripts/benchmark_latency.py` **contra o
+container Docker** (100 requisições, após warmup):
+
+| Métrica | Valor |
+|---|---|
+| Média | 46.52 ms |
+| Mediana | 48.99 ms |
+| p95 | 52.64 ms |
+| p99 | 62.87 ms |
+| Min | 38.61 ms |
+| Max | 99.21 ms |
 
 ```bash
+docker build -t triagem-laudos-api .
+docker run -p 8000:8000 triagem-laudos-api
 poetry run python scripts/benchmark_latency.py --url http://localhost:8000 --n 100 --tag baseline
 ```
 
-Esse número serve de referência para a comparação com o modelo otimizado em
-ONNX na Etapa 4. Ao rodar contra o container Docker (em vez do `uvicorn`
-local), espera-se latência equivalente — a rede é loopback em ambos os casos.
+Essa é a baseline oficial (rodando no container, como pedido no enunciado) a
+ser comparada com o modelo otimizado em ONNX na Etapa 4.
+
+## CI/CD (Etapa 2)
+
+Workflow em `.github/workflows/ci.yml`, disparado em todo push e pull request
+para `main`, com 3 jobs em sequência:
+
+1. **lint** — `ruff check .`
+2. **test** — `pytest -v` (11 testes: contrato da API mockando o modelo + smoke
+   test do pipeline de treino real em dados sintéticos)
+3. **build** — treina o modelo baseline e builda a imagem Docker, validando
+   que o Dockerfile funciona de ponta a ponta
+
+Rodar localmente antes de dar push:
+
+```bash
+poetry run ruff check .
+poetry run pytest -v
+```
+
+## Orquestração de retreino com Airflow (Etapa 2)
+
+DAG em `airflow/dags/retrain_pipeline_dag.py`, com duas tasks encadeadas
+(TaskFlow API): `carregar_dados` → `treinar_modelo`. A lógica de verdade fica
+em `training/` — a DAG só chama essas funções, para não duplicar código entre
+o treino manual, os testes e o retreino orquestrado.
+
+```bash
+# instalar o Airflow num ambiente isolado (não usa o Poetry do projeto —
+# ver o comentário no topo de airflow/requirements.txt)
+AIRFLOW_VERSION=2.10.3
+PYTHON_VERSION="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+pip install "apache-airflow==${AIRFLOW_VERSION}" \
+  --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
+pip install -r airflow/requirements.txt
+
+export AIRFLOW_HOME=$(pwd)/airflow
+airflow db migrate
+
+# validar que a DAG carrega sem erros
+airflow dags list-import-errors
+
+# rodar a DAG completa uma vez (carrega dados + treina + salva o modelo)
+airflow dags test triagem_laudos_retrain 2024-01-01
+
+# ou subir a UI (http://localhost:8080) e disparar manualmente
+airflow standalone
+```
+
+Validado neste ambiente: a DAG carrega sem erros de import, o grafo de tasks
+fica correto (`carregar_dados >> treinar_modelo`) e a task `carregar_dados`
+roda de ponta a ponta via `airflow tasks test`, retornando
+`{'n_train': 11550, 'n_test': 2888}`. A task `treinar_modelo` reaproveita o
+`training/train.py` já validado manualmente (Etapa 1) — não foi reexecutada
+aqui via Airflow por já levar ~1-2 min com os hiperparâmetros finais.
 
 ## Etapas do desafio
 
 - [x] **Estrutura do projeto** — pastas, `.gitignore`, Docker, Poetry, README
 - [x] **Etapa 1** — API FastAPI (`/health`, `/predict`) + modelo baseline (TF-IDF + Random Forest) + Dockerfile + latência baseline medida
-- [ ] **Etapa 2** — GitHub Actions (lint + test) + DAG Airflow de treino
+- [x] **Etapa 2** — GitHub Actions (lint + test + build) + DAG Airflow de treino
 - [ ] **Etapa 3** — Docker Compose (API + Prometheus + Grafana) + dashboard
 - [ ] **Etapa 4** — Otimização ONNX + comparação de latência + vídeo STAR
 
