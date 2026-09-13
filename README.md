@@ -230,12 +230,48 @@ roda de ponta a ponta via `airflow tasks test`, retornando
 `training/train.py` já validado manualmente (Etapa 1) — não foi reexecutada
 aqui via Airflow por já levar ~1-2 min com os hiperparâmetros finais.
 
+## Monitoramento (Etapa 3)
+
+A API é instrumentada com `prometheus_client` via middleware HTTP
+(`app/metrics.py` + `app/main.py`), expondo em `/metrics`:
+
+- `http_requests_total{method, path, status_code}` — contador de requisições
+- `http_request_duration_seconds{method, path}` — histograma de latência
+
+A rota `/metrics` fica de fora da própria instrumentação (senão a raspagem
+do Prometheus inflaria as próprias métricas).
+
+```bash
+# sobe API + Prometheus + Grafana juntos
+docker compose up --build
+
+# API:        http://localhost:8000  (docs em /docs, métricas em /metrics)
+# Prometheus: http://localhost:9090
+# Grafana:    http://localhost:3000  (login anônimo habilitado como Viewer;
+#                                      admin/admin por padrão, ver .env)
+
+# gerar tráfego para popular o dashboard
+poetry run python scripts/benchmark_latency.py --url http://localhost:8000 --n 100
+```
+
+O Prometheus (`monitoring/prometheus/prometheus.yml`) raspa `api:8000/metrics`
+a cada 15s. O Grafana já sobe com o datasource do Prometheus e o dashboard
+`monitoring/grafana/dashboards/api_dashboard.json` provisionados
+automaticamente (`monitoring/grafana/provisioning/`), com 4 painéis:
+
+1. **Total de Requisições** — `sum(http_requests_total)`
+2. **Latência (p50/p95/p99)** — `histogram_quantile(...,
+   http_request_duration_seconds_bucket)`
+3. **Taxa de Erro (5xx)** — proporção de respostas 5xx sobre o total
+4. **Requisições por segundo, por endpoint** — `rate(http_requests_total[5m])
+   by (path)`
+
 ## Etapas do desafio
 
 - [x] **Estrutura do projeto** — pastas, `.gitignore`, Docker, Poetry, README
 - [x] **Etapa 1** — API FastAPI (`/health`, `/predict`) + modelo baseline (TF-IDF + Random Forest) + Dockerfile + latência baseline medida
 - [x] **Etapa 2** — GitHub Actions (lint + test + build) + DAG Airflow de treino
-- [ ] **Etapa 3** — Docker Compose (API + Prometheus + Grafana) + dashboard
+- [x] **Etapa 3** — Docker Compose (API + Prometheus + Grafana) + dashboard
 - [ ] **Etapa 4** — Otimização ONNX + comparação de latência + vídeo STAR
 
 ## Vídeo STAR
