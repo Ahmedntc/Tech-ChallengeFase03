@@ -266,14 +266,65 @@ automaticamente (`monitoring/grafana/provisioning/`), com 4 painéis:
 4. **Requisições por segundo, por endpoint** — `rate(http_requests_total[5m])
    by (path)`
 
+## Otimização de latência com ONNX (Etapa 4)
+
+Técnica aplicada: conversão do pipeline treinado (TF-IDF + Random Forest)
+para o formato **ONNX**, servido via **ONNX Runtime** em vez do runtime
+Python do scikit-learn.
+
+```bash
+# converte models/model.pkl (já treinado) para models/model.onnx
+poetry run python -m training.optimize_onnx
+```
+
+`app/model_loader.py` suporta os dois backends por trás da mesma interface
+(`predict_one`), escolhido pela env var `MODEL_FORMAT` (ver `.env.example`):
+
+```bash
+# sklearn (padrão)
+poetry run uvicorn app.main:app --reload
+
+# ONNX Runtime
+MODEL_FORMAT=onnx poetry run uvicorn app.main:app --reload
+```
+
+Comparação de latência do `/predict`, mesmo ambiente (local, 100 requisições
+após warmup, `scripts/benchmark_latency.py`):
+
+| Backend | Média | Mediana | p95 | p99 |
+|---|---|---|---|---|
+| sklearn (.pkl) | 43.76 ms | 46.92 ms | 48.96 ms | 50.16 ms |
+| **ONNX Runtime (.onnx)** | **1.82 ms** | **1.75 ms** | **2.01 ms** | **2.73 ms** |
+
+**~24x mais rápido** com ONNX Runtime, sem alterar o resultado da
+classificação — a saída (`predict_proba`) é numericamente idêntica entre os
+dois backends (validado em `tests/test_model.py::test_onnx_conversion_smoke`
+e manualmente com os mesmos textos de exemplo). O ganho vem de eliminar o
+overhead do runtime Python do scikit-learn: o grafo ONNX (TF-IDF +
+`TreeEnsembleClassifier`) roda inteiramente em código nativo compilado.
+
+Detalhe de compatibilidade: a conversão via `skl2onnx` exige fixar `onnx
+<1.17` (API `onnx.mapping`, removida em versões mais novas) e `protobuf
+<5.0` (versões mais novas quebram a construção de atributos do
+`TreeEnsembleClassifier` — ver comentários em `pyproject.toml`). O operador
+`StringNormalizer` usado internamente para o `stop_words="english"` do
+TF-IDF também exige a locale `en_US.UTF-8` no sistema — por isso o
+`Dockerfile` instala o pacote `locales` e gera essa locale na imagem.
+
+> Nota de ambiente: a comparação acima foi medida rodando a API localmente
+> (`uvicorn`, sem Docker), pois este ambiente de desenvolvimento tem a
+> política de rede bloqueando pulls de imagem do Docker Hub. A baseline
+> oficial em container (Etapa 1) foi 46.52 ms médios — consistente com os
+> 43.76 ms medidos aqui localmente para o mesmo backend sklearn.
+
 ## Etapas do desafio
 
 - [x] **Estrutura do projeto** — pastas, `.gitignore`, Docker, Poetry, README
 - [x] **Etapa 1** — API FastAPI (`/health`, `/predict`) + modelo baseline (TF-IDF + Random Forest) + Dockerfile + latência baseline medida
 - [x] **Etapa 2** — GitHub Actions (lint + test + build) + DAG Airflow de treino
 - [x] **Etapa 3** — Docker Compose (API + Prometheus + Grafana) + dashboard
-- [ ] **Etapa 4** — Otimização ONNX + comparação de latência + vídeo STAR
+- [x] **Etapa 4** — Otimização ONNX + comparação de latência (vídeo STAR pendente)
 
 ## Vídeo STAR
 
-Link: _a adicionar na Etapa 4_.
+Roteiro em `docs/video_star.md`. Link do vídeo gravado: _a adicionar_.
