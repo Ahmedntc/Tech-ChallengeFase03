@@ -16,6 +16,13 @@ dependencies = [
   "prometheus-client (>=0.21,<0.22)",
   "onnxruntime (>=1.19,<1.20)",
   "skl2onnx (>=1.17,<1.18)",
+  # skl2onnx 1.17 ainda usa a API antiga onnx.mapping, removida no onnx 1.17+
+  # (ver https://github.com/onnx/sklearn-onnx/issues) — fixamos onnx <1.17.
+  "onnx (>=1.16,<1.17)",
+  # protobuf >=6 quebra a conversão de RandomForestClassifier no
+  # onnxconverter-common 1.16 ("Expected an int, got a boolean" no
+  # TreeEnsembleClassifier) — fixamos numa faixa compatível e testada.
+  "protobuf (>=4.25,<5.0)",
   "pydantic (>=2.9,<3.0)",
 ]
 
