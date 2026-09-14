@@ -86,3 +86,14 @@ def test_predict_modelo_indisponivel(monkeypatch):
     resp = client.post("/predict", json={"texto": TEXTO_VALIDO})
 
     assert resp.status_code == 503
+
+
+def test_metrics_expoe_formato_prometheus():
+    client.get("/health")
+
+    resp = client.get("/metrics")
+
+    assert resp.status_code == 200
+    assert "text/plain" in resp.headers["content-type"]
+    assert "http_requests_total" in resp.text
+    assert "http_request_duration_seconds" in resp.text
