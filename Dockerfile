@@ -25,9 +25,18 @@ FROM python:3.11-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PATH="/app/.venv/bin:$PATH"
+    PATH="/app/.venv/bin:$PATH" \
+    LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8
 
 WORKDIR /app
+
+# locale en_US.UTF-8: exigida pelo operador ONNX StringNormalizer (usado na
+# inferência via ONNX Runtime, Etapa 4) para normalização de texto em inglês
+RUN apt-get update && apt-get install -y --no-install-recommends locales \
+    && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
+    && locale-gen en_US.UTF-8 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Usuário não-root
 RUN groupadd -r app && useradd -r -g app app
