@@ -40,12 +40,11 @@ def test_load_labels_map_retorna_dicionario_com_5_classes():
 
 
 def test_build_pipeline_fit_predict_smoke():
-    """Treina o pipeline real (TF-IDF + RandomForest) em dados sintéticos
-    minúsculos, só para garantir que fit/predict/predict_proba funcionam.
+    """Treina o pipeline real (TF-IDF + LogisticRegression) em dados
+    sintéticos minúsculos, só para garantir que fit/predict/predict_proba
+    funcionam.
     """
     pipeline = build_pipeline()
-    # reduz o custo computacional só para o teste
-    pipeline.set_params(clf__n_estimators=5, clf__max_depth=3)
 
     textos = [
         "chest pain and shortness of breath",
@@ -70,7 +69,6 @@ def test_onnx_conversion_smoke():
     ONNX Runtime bate com a do pipeline sklearn original.
     """
     pipeline = build_pipeline()
-    pipeline.set_params(clf__n_estimators=5, clf__max_depth=3)
 
     textos = [
         "chest pain and shortness of breath",

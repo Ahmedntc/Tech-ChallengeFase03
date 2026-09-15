@@ -37,7 +37,10 @@ COMPARISON_PATH = MODELS_DIR / "model_comparison.json"
 
 def _tfidf() -> TfidfVectorizer:
     # Mesmos parâmetros do training/train.py, para isolar o efeito do
-    # classificador — só ele muda entre os três candidatos.
+    # classificador — só ele muda entre os três candidatos. Config de TF-IDF
+    # "forte" (bigramas + stopwords), só pra comparar algoritmos; o TF-IDF
+    # de produção em training/train.py usa unigramas por motivo de
+    # compatibilidade com ONNX (ver comentário lá).
     return TfidfVectorizer(
         max_features=20_000,
         ngram_range=(1, 2),
