@@ -1,0 +1,19 @@
+# Dependências extras do venv do Airflow (.venv-airflow), separado do Poetry.
+#
+# O Airflow é instalado com o arquivo de constraints oficial do projeto
+# (ver comando em README.md / no docstring de dags/retrain_pipeline_dag.py),
+# que fixa versões de todas as suas dependências transitivas — misturar isso
+# com o resolver do Poetry (usado pelo resto do projeto) causa conflitos de
+# versão. Por isso o Airflow vive num venv próprio, e este arquivo lista só
+# o que falta *além* dele: as libs que training/preprocess.py e
+# training/train.py precisam para a DAG rodar de ponta a ponta (a task
+# treinar_modelo chama training.train.main() diretamente).
+#
+# Uso:
+#   pip install -r airflow/requirements.txt
+#
+# Versões alinhadas às de pyproject.toml (mesmo comportamento de treino do
+# Poetry, sem ficar preso ao resolver dele).
+pandas>=2.2,<2.3
+scikit-learn>=1.5,<1.6
+joblib>=1.4,<1.5
