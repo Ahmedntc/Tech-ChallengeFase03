@@ -34,21 +34,36 @@ bloco indica o tempo sugerido e o que mostrar na tela.
    dashboard do Grafana (`monitoring/grafana/dashboards/api_dashboard.json`)
    com os 4 painéis enquanto dispara requisições com
    `scripts/benchmark_latency.py`.
-4. **Otimização de latência (Etapa 4)** — Mostrar a conversão
-   (`poetry run python -m training.optimize_onnx`) e o `app/model_loader.py`
-   com os dois backends (sklearn vs ONNX Runtime) por trás da mesma
-   interface `predict_one`.
+4. **Escolha do algoritmo + otimização de latência (Etapa 4)** — Mostrar
+   `training/compare_models.py` comparando Random Forest, Logistic
+   Regression e Linear SVM sobre o mesmo TF-IDF (README, seção "Escolha do
+   algoritmo"), a troca do modelo de produção pra Logistic Regression, a
+   conversão (`poetry run python -m training.optimize_onnx`) e o
+   `app/model_loader.py` com os dois backends (sklearn vs ONNX Runtime) por
+   trás da mesma interface `predict_one`.
 
 ## Result (~1min)
 
-- Mostrar a tabela comparativa de latência (README, seção "Otimização de
-  latência com ONNX"): sklearn ~43.8 ms médios vs ONNX Runtime ~1.8 ms
-  médios — ganho de ~24x, sem mudar a classificação retornada.
+- Mostrar a tabela comparativa de algoritmos (README, "Escolha do
+  algoritmo"): Logistic Regression venceu Random Forest em acurácia,
+  F1-macro, confiança média **e** treina ~12x mais rápido.
+- Mostrar a tabela de latência ONNX (README, "Otimização de latência com
+  ONNX"): Logistic Regression sklearn ~2.9ms vs ONNX ~2.2ms.
 - Lições aprendidas a mencionar:
-  - Ganho de latência de otimizar o *runtime* de inferência foi muito maior
-    que qualquer ajuste de hiperparâmetro do modelo.
-  - Compatibilidade de versões (onnx/protobuf/skl2onnx) foi o maior atrito
-    técnico da conversão — documentado em `pyproject.toml`.
+  - **A escolha do algoritmo importou mais que a otimização de runtime**:
+    trocar Random Forest por Logistic Regression, sozinho, já derrubou a
+    latência de inferência pura de ~54ms pra ~1ms — maior que o ganho que a
+    conversão ONNX trouxe para a Random Forest original.
+  - **ONNX rende menos quando o modelo já é rápido**: para Logistic
+    Regression, boa parte do tempo de resposta é overhead de HTTP/FastAPI,
+    não inferência — não dá pra otimizar isso convertendo o modelo.
+  - **Validar em lote, não só com 2-3 exemplos**: rodando a comparação
+    sklearn-vs-ONNX nas 2.888 amostras de teste (não só em exemplos
+    manuais), descobrimos que ~3% das classificações mudavam de classe —
+    um bug real na conversão (tokenização + formação de bigramas com
+    stopwords removidas), não arredondamento. Corrigido ajustando o TF-IDF
+    de treino pra tokenizar de forma idêntica ao ONNX; depois da correção,
+    a divergência caiu pra 0.69% (resíduo esperado de float32 vs float64).
   - Observabilidade (Prometheus/Grafana) desde a Etapa 3 permitiu enxergar
-    o efeito da otimização em métricas reais, não só em benchmark isolado.
+    o efeito de cada mudança em métricas reais, não só em benchmark isolado.
 - Fechar com o checklist final do README todo marcado.
