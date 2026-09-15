@@ -139,21 +139,14 @@ docker compose up --build
 
 ## Modelo baseline e latência (Etapa 1)
 
-Métricas do modelo (TF-IDF + Random Forest, 200 árvores, treinado sobre as
-11.550 amostras de treino, avaliado nas 2.888 de teste):
+Modelo original da Etapa 1: TF-IDF + Random Forest (200 árvores), treinado
+sobre as 11.550 amostras de treino, avaliado nas 2.888 de teste.
 
 | Métrica | Valor |
 |---|---|
 | Acurácia | 0.4771 |
 | F1-macro | 0.4795 |
 | Tempo de treino | 20.0 s |
-
-Acurácia moderada é esperada aqui: são 5 classes de condição clínica com
-sobreposição de vocabulário (ex.: "general pathological conditions" é uma
-classe "genérica" que puxa recall de outras). Serve como baseline honesto
-para comparar contra a versão otimizada em ONNX na Etapa 4 — o foco do
-desafio é o pipeline (deploy, CI/CD, monitoramento, latência), não a métrica
-de classificação em si.
 
 Latência do `/predict`, medida com `scripts/benchmark_latency.py` **contra o
 container Docker** (100 requisições, após warmup):
@@ -173,8 +166,35 @@ docker run -p 8000:8000 triagem-laudos-api
 poetry run python scripts/benchmark_latency.py --url http://localhost:8000 --n 100 --tag baseline
 ```
 
-Essa é a baseline oficial (rodando no container, como pedido no enunciado) a
-ser comparada com o modelo otimizado em ONNX na Etapa 4.
+> **Atualização:** o modelo de produção foi trocado de Random Forest para
+> **Logistic Regression** após a comparação de algoritmos abaixo. Os números
+> de Random Forest ficam aqui como registro histórico da Etapa 1; o modelo
+> que a API roda hoje é o descrito na seção seguinte.
+
+## Escolha do algoritmo
+
+O enunciado cita "TF-IDF + Random Forest" só como exemplo ("ex.:"), não como
+obrigação — o requisito real é "Scikit-Learn ou framework de preferência"
+para um modelo leve de classificação de texto. `training/compare_models.py`
+treina três candidatos sobre o **mesmo** TF-IDF (Random Forest, Logistic
+Regression, Linear SVM calibrado) e compara acurácia, F1-macro, confiança
+média e tempo de treino:
+
+```bash
+poetry run python -m training.compare_models
+```
+
+| Modelo | Acurácia | F1-macro | Confiança média | Treino |
+|---|---|---|---|---|
+| Random Forest | 0.4827 | 0.4855 | 0.4458 | 64.6 s |
+| **Logistic Regression** | **0.5076** | **0.5089** | **0.74** | **5.3 s** |
+| Linear SVM (calibrado) | 0.5087 | 0.4915 | 0.5203 | 6.0 s |
+
+Logistic Regression venceu em quase tudo: melhor F1-macro, confiança muito
+mais alta (o modelo "sabe melhor quando sabe") e treina ~12x mais rápido.
+`training/train.py` foi atualizado para usar esse modelo — os números acima
+já refletem a configuração final de produção (ver próxima seção sobre por
+que o TF-IDF também mudou de bigramas para unigramas).
 
 ## CI/CD (Etapa 2)
 
@@ -268,9 +288,9 @@ automaticamente (`monitoring/grafana/provisioning/`), com 4 painéis:
 
 ## Otimização de latência com ONNX (Etapa 4)
 
-Técnica aplicada: conversão do pipeline treinado (TF-IDF + Random Forest)
-para o formato **ONNX**, servido via **ONNX Runtime** em vez do runtime
-Python do scikit-learn.
+Técnica aplicada: conversão do pipeline treinado (TF-IDF + Logistic
+Regression, ver seção "Escolha do algoritmo") para o formato **ONNX**,
+servido via **ONNX Runtime** em vez do runtime Python do scikit-learn.
 
 ```bash
 # converte models/model.pkl (já treinado) para models/model.onnx
@@ -289,33 +309,62 @@ MODEL_FORMAT=onnx poetry run uvicorn app.main:app --reload
 ```
 
 Comparação de latência do `/predict`, mesmo ambiente (local, 100 requisições
-após warmup, `scripts/benchmark_latency.py`):
+após warmup, `scripts/benchmark_latency.py`), já com o modelo de produção
+(Logistic Regression, ver seção "Escolha do algoritmo"):
 
 | Backend | Média | Mediana | p95 | p99 |
 |---|---|---|---|---|
-| sklearn (.pkl) | 43.76 ms | 46.92 ms | 48.96 ms | 50.16 ms |
-| **ONNX Runtime (.onnx)** | **1.82 ms** | **1.75 ms** | **2.01 ms** | **2.73 ms** |
+| Logistic Regression (sklearn) | 2.88 ms | 2.83 ms | 3.22 ms | 3.69 ms |
+| **Logistic Regression (ONNX Runtime)** | **2.23 ms** | **2.15 ms** | **2.64 ms** | **3.51 ms** |
 
-**~24x mais rápido** com ONNX Runtime, sem alterar o resultado da
-classificação — a saída (`predict_proba`) é numericamente idêntica entre os
-dois backends (validado em `tests/test_model.py::test_onnx_conversion_smoke`
-e manualmente com os mesmos textos de exemplo). O ganho vem de eliminar o
-overhead do runtime Python do scikit-learn: o grafo ONNX (TF-IDF +
-`TreeEnsembleClassifier`) roda inteiramente em código nativo compilado.
+ONNX ainda ganha (~23% mais rápido), mas o ganho é bem menor que os ~24x que
+a conversão trazia para a Random Forest original. Faz sentido: Logistic
+Regression já é uma operação matemática só (multiplicação de matriz +
+softmax) — a maior parte dos ~2-3ms medidos acima é overhead de HTTP/FastAPI
+(roteamento, parsing JSON, rede de loopback), não inferência em si. Medindo
+só a chamada `predict_proba` (sem HTTP), a diferença é maior: **1.08ms
+(sklearn) vs frações de ms no grafo ONNX equivalente** — mas isso deixa de
+aparecer no tempo de resposta ponta a ponta porque o "piso" do transporte
+HTTP já domina o total. **Lição prática: ONNX rende mais quando o modelo
+original é o gargalo (caso da Random Forest); quando o modelo já é rápido,
+o gargalo vira a camada de serviço, e não dá pra otimizar isso convertendo
+o modelo.**
 
-Detalhe de compatibilidade: a conversão via `skl2onnx` exige fixar `onnx
-<1.17` (API `onnx.mapping`, removida em versões mais novas) e `protobuf
-<5.0` (versões mais novas quebram a construção de atributos do
-`TreeEnsembleClassifier` — ver comentários em `pyproject.toml`). O operador
+**Bug real encontrado e corrigido durante essa troca:** ao converter
+Logistic Regression para ONNX, uma validação em lote (2.888 amostras de
+teste, não só 2-3 exemplos manuais) revelou que ~3% das classificações
+mudavam de classe entre sklearn e ONNX — não era só arredondamento. Duas
+causas, ambas em `training/train.py`, comentadas no código:
+
+1. **Tokenização**: o `token_pattern` default do sklearn (`\b\w\w+\b`, exige
+   2+ caracteres) não é suportado pelo operador `Tokenizer` do ONNX (não
+   aceita `\b`), que o `skl2onnx` "traduz" para `[a-zA-Z0-9_]+` — uma regra
+   diferente. Corrigido fixando esse mesmo padrão simplificado no
+   `TfidfVectorizer`, para tokenizar identicamente nos dois lados.
+2. **Bigramas + stopwords**: o sklearn forma bigramas a partir do fluxo de
+   tokens **já sem stopwords** (ex.: em "prognosis **of** patients", remove
+   "of" e cola o bigrama "prognosis patients") — o operador de n-gramas do
+   ONNX não reproduz esse "pular e colar". É uma limitação estrutural do
+   `skl2onnx`, não um erro de configuração. Resolvido usando só unigramas
+   (`ngram_range=(1, 1)`) — que, testado empiricamente, também teve a
+   *melhor* acurácia entre as configurações tentadas.
+
+Depois das duas correções, validando no dataset de teste completo (2.888
+amostras): **0.69% de mudança de classe** (20 amostras) e diferença média de
+probabilidade de 0.007 — resíduo esperado de precisão numérica (ONNX Runtime
+usa float32, sklearn usa float64), não mais um erro estrutural de conversão.
+
+Detalhe de compatibilidade adicional: a conversão via `skl2onnx` exige fixar
+`onnx <1.17` (API `onnx.mapping`, removida em versões mais novas) e
+`protobuf <5.0` (versões mais novas quebram a construção de atributos de
+classificadores — ver comentários em `pyproject.toml`). O operador
 `StringNormalizer` usado internamente para o `stop_words="english"` do
 TF-IDF também exige a locale `en_US.UTF-8` no sistema — por isso o
 `Dockerfile` instala o pacote `locales` e gera essa locale na imagem.
 
 > Nota de ambiente: a comparação acima foi medida rodando a API localmente
 > (`uvicorn`, sem Docker), pois este ambiente de desenvolvimento tem a
-> política de rede bloqueando pulls de imagem do Docker Hub. A baseline
-> oficial em container (Etapa 1) foi 46.52 ms médios — consistente com os
-> 43.76 ms medidos aqui localmente para o mesmo backend sklearn.
+> política de rede bloqueando pulls de imagem do Docker Hub.
 
 ## Etapas do desafio
 

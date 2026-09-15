@@ -1,8 +1,12 @@
 """Treino do classificador de texto (baseline).
 
-Pipeline: TF-IDF + Random Forest, conforme sugerido no enunciado do desafio.
-Este mesmo script é reaproveitado pela DAG do Airflow (Etapa 2) como a task
-de treino/salvamento do modelo.
+Pipeline: TF-IDF + Logistic Regression. O enunciado do desafio cita
+"TF-IDF + Random Forest ou modelo leve similar" apenas como exemplo, não
+como obrigação — a comparação em training/compare_models.py mostrou que
+Logistic Regression supera a Random Forest em F1-macro, confiança média e
+latência de inferência sobre este dataset (ver README, seção "Escolha do
+algoritmo"). Este mesmo script é reaproveitado pela DAG do Airflow
+(Etapa 2) como a task de treino/salvamento do modelo.
 
 Uso:
     poetry run python -m training.train
@@ -15,8 +19,8 @@ import time
 from pathlib import Path
 
 import joblib
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, classification_report, f1_score
 from sklearn.pipeline import Pipeline
 
@@ -35,19 +39,39 @@ def build_pipeline() -> Pipeline:
                 "tfidf",
                 TfidfVectorizer(
                     max_features=20_000,
-                    ngram_range=(1, 2),
+                    # Unigramas apenas: bigramas + stop_words="english" juntos
+                    # quebram a conversão para ONNX. O sklearn forma bigramas
+                    # a partir do fluxo de tokens JÁ SEM stopwords (ex.: em
+                    # "prognosis of patients", remove "of" e cola o bigrama
+                    # "prognosis patients"), mas o operador de n-gramas do
+                    # ONNX (via skl2onnx) não reproduz esse "pular e colar" —
+                    # é uma limitação estrutural do skl2onnx, não um bug de
+                    # configuração. Testamos empiricamente (ver
+                    # training/compare_models.py e o histórico do PR): sem
+                    # bigramas, sklearn e ONNX batem quase exatamente, e essa
+                    # configuração ainda teve a MELHOR acurácia entre as
+                    # testadas (0.5076 vs 0.5028 com bigramas).
+                    ngram_range=(1, 1),
                     stop_words="english",
                     sublinear_tf=True,
+                    # token_pattern default do sklearn é \b\w\w+\b (2+
+                    # caracteres, com fronteira de palavra). O operador
+                    # Tokenizer do ONNX não suporta \b, então o skl2onnx
+                    # "traduz" esse padrão para [a-zA-Z0-9_]+ (1+ caractere,
+                    # sem fronteira) na conversão. Fixamos aqui o MESMO padrão
+                    # simplificado que o ONNX usa, para tokenizar de forma
+                    # idêntica nos dois lados por construção (ver
+                    # training/optimize_onnx.py).
+                    token_pattern=r"[a-zA-Z0-9_]+",
                 ),
             ),
             (
                 "clf",
-                RandomForestClassifier(
-                    n_estimators=200,
-                    max_depth=40,
-                    n_jobs=-1,
-                    random_state=42,
+                LogisticRegression(
+                    max_iter=1000,
+                    C=10.0,
                     class_weight="balanced",
+                    random_state=42,
                 ),
             ),
         ]
@@ -68,7 +92,7 @@ def main() -> None:
 
     pipeline = build_pipeline()
 
-    print("Treinando pipeline (TF-IDF + RandomForest)...")
+    print("Treinando pipeline (TF-IDF + LogisticRegression)...")
     t0 = time.perf_counter()
     pipeline.fit(X_train, y_train)
     train_seconds = time.perf_counter() - t0
@@ -92,7 +116,7 @@ def main() -> None:
         json.dump({str(k): v for k, v in labels_map.items()}, f, ensure_ascii=False, indent=2)
 
     metrics = {
-        "model": "tfidf+random_forest",
+        "model": "tfidf+logistic_regression",
         "n_train_samples": int(len(X_train)),
         "n_test_samples": int(len(X_test)),
         "train_seconds": round(train_seconds, 2),
