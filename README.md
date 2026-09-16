@@ -374,6 +374,3 @@ TF-IDF também exige a locale `en_US.UTF-8` no sistema — por isso o
 - [x] **Etapa 3** — Docker Compose (API + Prometheus + Grafana) + dashboard
 - [x] **Etapa 4** — Otimização ONNX + comparação de latência (vídeo STAR pendente)
 
-## Vídeo STAR
-
-Roteiro em `docs/video_star.md`. Link do vídeo gravado: _a adicionar_.
